@@ -18,7 +18,14 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.widget.*
+import android.view.Gravity
+import android.view.View
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -27,14 +34,15 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileWriter
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), SensorEventListener {
 
-    private lateinit var wifiManager: WifiManager
-    private lateinit var sensorManager: SensorManager
-    private lateinit var locationManager: LocationManager
+    private var wifiManager: WifiManager? = null
+    private var sensorManager: SensorManager? = null
+    private var locationManager: LocationManager? = null
 
     private var etLocationName: EditText? = null
     private var etX: EditText? = null
@@ -52,22 +60,18 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var csvFile: File? = null
     private var imuCsvFile: File? = null
 
-    // Heading
     private var currentHeading = 0.0
     private var gravity = FloatArray(3)
     private var geomagnetic = FloatArray(3)
 
-    // Step counting
     private var stepCount = 0
     private var initialStepCounterValue = -1L
     private var sensorType = "Initializing..."
     private var useAccelerometerFallback = false
 
-    // Accelerometer fallback
     private var lastStepTime = 0L
     private var wasAboveThreshold = false
 
-    // WiFi scanning
     private var isScanning = false
     private var scanCount = 0
     private var targetScans = 10
@@ -77,12 +81,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var currentY = ""
     private var stepsSinceLastScan = 0
 
-    // Handler for UI updates
     private val handler = Handler(Looper.getMainLooper())
     private var lastDisplayedSteps = -1
     private var lastDisplayedHeading = -1
 
-    // UI Update Runnable - forces refresh every 100ms
     private val uiUpdateRunnable = object : Runnable {
         override fun run() {
             val currentSteps = stepCount
@@ -98,61 +100,74 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
 
-    private val wifiScanReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == WifiManager.SCAN_RESULTS_AVAILABLE_ACTION) {
-                val success = intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false)
-                if (isScanning) processScanResults(success)
-            }
-        }
-    }
-
-    companion object {
-        private const val PERMISSION_REQUEST_CODE = 100
-    }
+    private var wifiScanReceiver: BroadcastReceiver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        try {
+            wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+            locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
-        csvFile = File(getExternalFilesDir(null), "wifi_fingerprints.csv")
-        imuCsvFile = File(getExternalFilesDir(null), "imu_data.csv")
+            csvFile = File(getExternalFilesDir(null), "wifi_fingerprints.csv")
+            imuCsvFile = File(getExternalFilesDir(null), "imu_data.csv")
 
-        initializeCSVFiles()
-        createUI()
-        checkAndRequestPermissions()
+            initializeCSVFiles()
+            createUI()
+
+            wifiScanReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action == WifiManager.SCAN_RESULTS_AVAILABLE_ACTION) {
+                        val success = intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false)
+                        if (isScanning) processScanResults(success)
+                    }
+                }
+            }
+
+            checkAndRequestPermissions()
+
+        } catch (e: Exception) {
+            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onResume() {
         super.onResume()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(
-                wifiScanReceiver,
-                IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
-                Context.RECEIVER_NOT_EXPORTED
-            )
-        } else {
-            registerReceiver(
-                wifiScanReceiver,
-                IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
-            )
-        }
+        try {
+            wifiScanReceiver?.let { receiver ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(
+                        receiver,
+                        IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
+                        Context.RECEIVER_NOT_EXPORTED
+                    )
+                } else {
+                    registerReceiver(
+                        receiver,
+                        IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+                    )
+                }
+            }
 
-        startAllSensors()
-        handler.post(uiUpdateRunnable)
+            startAllSensors()
+            handler.post(uiUpdateRunnable)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Resume error: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onPause() {
         super.onPause()
         try {
-            unregisterReceiver(wifiScanReceiver)
+            wifiScanReceiver?.let { unregisterReceiver(it) }
         } catch (e: Exception) {}
 
-        sensorManager.unregisterListener(this)
+        try {
+            sensorManager?.unregisterListener(this)
+        } catch (e: Exception) {}
+
         handler.removeCallbacks(uiUpdateRunnable)
     }
 
@@ -178,7 +193,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         if (needed.isNotEmpty()) {
             tvStatus?.text = "Requesting permissions..."
-            ActivityCompat.requestPermissions(this, needed.toTypedArray(), PERMISSION_REQUEST_CODE)
+            ActivityCompat.requestPermissions(this, needed.toTypedArray(), 100)
         } else {
             onPermissionsReady()
         }
@@ -187,13 +202,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
 
-        if (requestCode == PERMISSION_REQUEST_CODE) {
+        if (requestCode == 100) {
             val allGranted = grantResults.all { it == PackageManager.PERMISSION_GRANTED }
 
             if (allGranted) {
-                Toast.makeText(this, "✓ All permissions granted!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "All permissions granted!", Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(this, "⚠️ Some permissions denied", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Some permissions denied", Toast.LENGTH_LONG).show()
             }
 
             onPermissionsReady()
@@ -207,108 +222,92 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
 
     private fun startAllSensors() {
-        sensorManager.unregisterListener(this)
+        try {
+            sensorManager?.unregisterListener(this)
 
-        var stepSensorStarted = false
+            var stepSensorStarted = false
 
-        // PRIORITY 1: TYPE_STEP_DETECTOR (instant, 1 event per step)
-        val stepDetector = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
-        if (stepDetector != null) {
-            val registered = sensorManager.registerListener(
-                this,
-                stepDetector,
-                SensorManager.SENSOR_DELAY_FASTEST,
-                0
-            )
-            if (registered) {
-                sensorType = "Step Detector ✓"
-                stepSensorStarted = true
-                useAccelerometerFallback = false
-            }
-        }
-
-        // PRIORITY 2: TYPE_STEP_COUNTER
-        if (!stepSensorStarted) {
-            val stepCounter = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
-            if (stepCounter != null) {
-                val registered = sensorManager.registerListener(
+            val stepDetector = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
+            if (stepDetector != null) {
+                val registered = sensorManager?.registerListener(
                     this,
-                    stepCounter,
+                    stepDetector,
                     SensorManager.SENSOR_DELAY_FASTEST,
                     0
-                )
+                ) ?: false
                 if (registered) {
-                    sensorType = "Step Counter ✓"
+                    sensorType = "Step Detector"
                     stepSensorStarted = true
                     useAccelerometerFallback = false
                 }
             }
-        }
 
-        // PRIORITY 3: Accelerometer fallback
-        if (!stepSensorStarted) {
-            sensorType = "Accelerometer ⚠️"
-            useAccelerometerFallback = true
-        }
+            if (!stepSensorStarted) {
+                val stepCounter = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+                if (stepCounter != null) {
+                    val registered = sensorManager?.registerListener(
+                        this,
+                        stepCounter,
+                        SensorManager.SENSOR_DELAY_FASTEST,
+                        0
+                    ) ?: false
+                    if (registered) {
+                        sensorType = "Step Counter"
+                        stepSensorStarted = true
+                        useAccelerometerFallback = false
+                    }
+                }
+            }
 
-        // Accelerometer (for heading + fallback steps)
-        val accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        if (accel != null) {
-            sensorManager.registerListener(
-                this,
-                accel,
-                SensorManager.SENSOR_DELAY_FASTEST,
-                0
-            )
-        }
+            if (!stepSensorStarted) {
+                sensorType = "Accelerometer"
+                useAccelerometerFallback = true
+            }
 
-        // Magnetometer for heading
-        val mag = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
-        if (mag != null) {
-            sensorManager.registerListener(
-                this,
-                mag,
-                SensorManager.SENSOR_DELAY_FASTEST,
-                0
-            )
-        }
+            val accel = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            if (accel != null) {
+                sensorManager?.registerListener(this, accel, SensorManager.SENSOR_DELAY_FASTEST, 0)
+            }
 
-        tvSensorType?.text = "Sensor: $sensorType"
-        tvStatus?.text = "✓ Ready"
+            val mag = sensorManager?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+            if (mag != null) {
+                sensorManager?.registerListener(this, mag, SensorManager.SENSOR_DELAY_FASTEST, 0)
+            }
+
+            tvSensorType?.text = "Sensor: $sensorType"
+            tvStatus?.text = "Ready"
+
+        } catch (e: Exception) {
+            Toast.makeText(this, "Sensor error: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onSensorChanged(event: SensorEvent) {
-        when (event.sensor.type) {
-
-            Sensor.TYPE_STEP_DETECTOR -> {
-                stepCount++
-            }
-
-            Sensor.TYPE_STEP_COUNTER -> {
-                val totalSteps = event.values[0].toLong()
-
-                if (initialStepCounterValue == -1L) {
-                    initialStepCounterValue = totalSteps - stepCount
+        try {
+            when (event.sensor.type) {
+                Sensor.TYPE_STEP_DETECTOR -> {
+                    stepCount++
                 }
-
-                stepCount = (totalSteps - initialStepCounterValue).toInt()
-            }
-
-            Sensor.TYPE_ACCELEROMETER -> {
-                gravity = event.values.clone()
-
-                if (useAccelerometerFallback) {
-                    detectStepFromAccelerometer(event.values)
+                Sensor.TYPE_STEP_COUNTER -> {
+                    val totalSteps = event.values[0].toLong()
+                    if (initialStepCounterValue == -1L) {
+                        initialStepCounterValue = totalSteps - stepCount
+                    }
+                    stepCount = (totalSteps - initialStepCounterValue).toInt()
                 }
-
-                updateHeading()
+                Sensor.TYPE_ACCELEROMETER -> {
+                    gravity = event.values.clone()
+                    if (useAccelerometerFallback) {
+                        detectStepFromAccelerometer(event.values)
+                    }
+                    updateHeading()
+                }
+                Sensor.TYPE_MAGNETIC_FIELD -> {
+                    geomagnetic = event.values.clone()
+                    updateHeading()
+                }
             }
-
-            Sensor.TYPE_MAGNETIC_FIELD -> {
-                geomagnetic = event.values.clone()
-                updateHeading()
-            }
-        }
+        } catch (e: Exception) {}
     }
 
     private fun detectStepFromAccelerometer(values: FloatArray) {
@@ -347,7 +346,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             currentHeading < 225 -> "S"
             else -> "W"
         }
-        tvIMUStatus?.text = "👟 Steps: $stepCount  |  🧭 ${currentHeading.toInt()}° ($dir)"
+        tvIMUStatus?.text = "Steps: $stepCount | ${currentHeading.toInt()}° ($dir)"
     }
 
     private fun resetSteps() {
@@ -355,18 +354,18 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         initialStepCounterValue = -1L
         lastDisplayedSteps = -1
         forceUpdateDisplay()
-        Toast.makeText(this, "✓ Steps reset to 0", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Steps reset", Toast.LENGTH_SHORT).show()
     }
 
     private fun checkLocationServices(): Boolean {
-        val isGpsEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
-        val isNetworkEnabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+        val isGpsEnabled = locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) ?: false
+        val isNetworkEnabled = locationManager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) ?: false
 
         if (!isGpsEnabled && !isNetworkEnabled) {
             AlertDialog.Builder(this)
                 .setTitle("Location Required")
-                .setMessage("WiFi scanning requires Location to be ON")
-                .setPositiveButton("Open Settings") { _, _ ->
+                .setMessage("WiFi scanning needs Location ON")
+                .setPositiveButton("Settings") { _, _ ->
                     startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
                 }
                 .setNegativeButton("Cancel", null)
@@ -393,210 +392,155 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     }
                 }
             }
-        } catch (e: Exception) {
-            Toast.makeText(this, "CSV init error: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
+        } catch (e: Exception) {}
     }
 
     private fun createUI() {
         val scrollView = ScrollView(this)
         val layout = LinearLayout(this)
         layout.orientation = LinearLayout.VERTICAL
-        layout.setPadding(40, 40, 40, 40)
+        layout.setPadding(32, 32, 32, 32)
 
         // Title
         val title = TextView(this)
         title.text = "WiFi Data Collector"
-        title.textSize = 26f
-        title.setTypeface(null, android.graphics.Typeface.BOLD)
-        title.setTextColor(android.graphics.Color.parseColor("#1565C0"))
+        title.textSize = 24f
+        title.gravity = Gravity.CENTER
         layout.addView(title)
 
-        val space1 = Space(this)
-        space1.minimumHeight = 15
-        layout.addView(space1)
+        addSpace(layout, 20)
 
-        // Sensor type indicator
+        // Sensor info
         tvSensorType = TextView(this)
         tvSensorType?.text = "Sensor: Initializing..."
-        tvSensorType?.textSize = 14f
-        tvSensorType?.setTextColor(android.graphics.Color.DKGRAY)
+        tvSensorType?.textSize = 12f
         layout.addView(tvSensorType)
 
-        val space2 = Space(this)
-        space2.minimumHeight = 20
-        layout.addView(space2)
+        addSpace(layout, 16)
 
-        // IMU DISPLAY (BIG)
+        // IMU Status
         tvIMUStatus = TextView(this)
-        tvIMUStatus?.text = "👟 Steps: 0  |  🧭 0° (N)"
-        tvIMUStatus?.textSize = 24f
-        tvIMUStatus?.setTypeface(null, android.graphics.Typeface.BOLD)
-        tvIMUStatus?.setTextColor(android.graphics.Color.WHITE)
-        tvIMUStatus?.setBackgroundColor(android.graphics.Color.parseColor("#E65100"))
-        tvIMUStatus?.setPadding(30, 30, 30, 30)
-        tvIMUStatus?.gravity = android.view.Gravity.CENTER
+        tvIMUStatus?.text = "Steps: 0 | 0° (N)"
+        tvIMUStatus?.textSize = 20f
+        tvIMUStatus?.gravity = Gravity.CENTER
+        tvIMUStatus?.setPadding(16, 24, 16, 24)
+        tvIMUStatus?.setBackgroundColor(0xFFFF9800.toInt())
+        tvIMUStatus?.setTextColor(0xFFFFFFFF.toInt())
         layout.addView(tvIMUStatus)
 
-        val space3 = Space(this)
-        space3.minimumHeight = 10
-        layout.addView(space3)
+        addSpace(layout, 12)
 
-        // Reset steps button
+        // Reset button
         btnResetSteps = Button(this)
-        btnResetSteps?.text = "🔄 RESET STEPS TO ZERO"
-        btnResetSteps?.textSize = 16f
-        btnResetSteps?.setBackgroundColor(android.graphics.Color.parseColor("#FF9800"))
-        btnResetSteps?.setTextColor(android.graphics.Color.WHITE)
+        btnResetSteps?.text = "RESET STEPS"
         btnResetSteps?.setOnClickListener { resetSteps() }
         layout.addView(btnResetSteps)
 
-        val space4 = Space(this)
-        space4.minimumHeight = 25
-        layout.addView(space4)
+        addSpace(layout, 20)
 
-        // Location name
-        val labelLocation = TextView(this)
-        labelLocation.text = "Location Name:"
-        labelLocation.textSize = 16f
-        layout.addView(labelLocation)
+        // Location input
+        val lblLocation = TextView(this)
+        lblLocation.text = "Location Name:"
+        layout.addView(lblLocation)
 
         etLocationName = EditText(this)
         etLocationName?.hint = "e.g., elevator_exit"
-        etLocationName?.setPadding(20, 20, 20, 20)
-        etLocationName?.setBackgroundColor(android.graphics.Color.parseColor("#F5F5F5"))
         layout.addView(etLocationName)
 
-        val space5 = Space(this)
-        space5.minimumHeight = 10
-        layout.addView(space5)
+        addSpace(layout, 8)
 
-        // X coordinate
-        val labelX = TextView(this)
-        labelX.text = "X Coordinate:"
-        labelX.textSize = 16f
-        layout.addView(labelX)
+        // X input
+        val lblX = TextView(this)
+        lblX.text = "X Coordinate:"
+        layout.addView(lblX)
 
         etX = EditText(this)
         etX?.hint = "0"
         etX?.inputType = android.text.InputType.TYPE_CLASS_NUMBER or
                 android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or
                 android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
-        etX?.setPadding(20, 20, 20, 20)
-        etX?.setBackgroundColor(android.graphics.Color.parseColor("#F5F5F5"))
         layout.addView(etX)
 
-        val space6 = Space(this)
-        space6.minimumHeight = 10
-        layout.addView(space6)
+        addSpace(layout, 8)
 
-        // Y coordinate
-        val labelY = TextView(this)
-        labelY.text = "Y Coordinate:"
-        labelY.textSize = 16f
-        layout.addView(labelY)
+        // Y input
+        val lblY = TextView(this)
+        lblY.text = "Y Coordinate:"
+        layout.addView(lblY)
 
         etY = EditText(this)
         etY?.hint = "0"
         etY?.inputType = android.text.InputType.TYPE_CLASS_NUMBER or
                 android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or
                 android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
-        etY?.setPadding(20, 20, 20, 20)
-        etY?.setBackgroundColor(android.graphics.Color.parseColor("#F5F5F5"))
         layout.addView(etY)
 
-        val space7 = Space(this)
-        space7.minimumHeight = 20
-        layout.addView(space7)
+        addSpace(layout, 16)
 
-        // WiFi networks display
-        val labelWifi = TextView(this)
-        labelWifi.text = "WiFi Networks:"
-        labelWifi.textSize = 16f
-        labelWifi.setTypeface(null, android.graphics.Typeface.BOLD)
-        layout.addView(labelWifi)
+        // WiFi list
+        val lblWifi = TextView(this)
+        lblWifi.text = "WiFi Networks:"
+        layout.addView(lblWifi)
 
         tvWifiList = TextView(this)
-        tvWifiList?.text = "Tap SCAN to detect networks..."
-        tvWifiList?.maxLines = 5
-        tvWifiList?.setPadding(15, 15, 15, 15)
-        tvWifiList?.setBackgroundColor(android.graphics.Color.parseColor("#ECEFF1"))
+        tvWifiList?.text = "Tap SCAN to detect..."
+        tvWifiList?.maxLines = 4
+        tvWifiList?.setPadding(12, 12, 12, 12)
+        tvWifiList?.setBackgroundColor(0xFFEEEEEE.toInt())
         layout.addView(tvWifiList)
 
-        val space8 = Space(this)
-        space8.minimumHeight = 15
-        layout.addView(space8)
+        addSpace(layout, 12)
 
         // Status
         tvStatus = TextView(this)
         tvStatus?.text = "Initializing..."
-        tvStatus?.textSize = 16f
-        tvStatus?.setTextColor(android.graphics.Color.parseColor("#1565C0"))
+        tvStatus?.textSize = 14f
         layout.addView(tvStatus)
 
         tvCount = TextView(this)
         tvCount?.text = "Total samples: 0"
-        tvCount?.textSize = 14f
-        tvCount?.setTextColor(android.graphics.Color.GRAY)
         layout.addView(tvCount)
 
-        val space9 = Space(this)
-        space9.minimumHeight = 20
-        layout.addView(space9)
+        addSpace(layout, 16)
 
-        // SCAN BUTTON
+        // Scan button
         btnScan = Button(this)
-        btnScan?.text = "📡 SCAN HERE (10X)"
-        btnScan?.textSize = 20f
-        btnScan?.setPadding(30, 40, 30, 40)
-        btnScan?.setBackgroundColor(android.graphics.Color.parseColor("#1565C0"))
-        btnScan?.setTextColor(android.graphics.Color.WHITE)
+        btnScan?.text = "SCAN HERE (10X)"
+        btnScan?.textSize = 18f
         btnScan?.setOnClickListener {
             val location = etLocationName?.text?.toString()?.trim() ?: ""
             val x = etX?.text?.toString()?.trim() ?: ""
             val y = etY?.text?.toString()?.trim() ?: ""
 
             if (location.isEmpty() || x.isEmpty() || y.isEmpty()) {
-                Toast.makeText(this@MainActivity, "⚠️ Fill all fields!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Fill all fields!", Toast.LENGTH_SHORT).show()
             } else {
                 collectData(location, x, y)
             }
         }
         layout.addView(btnScan)
 
-        val space10 = Space(this)
-        space10.minimumHeight = 15
-        layout.addView(space10)
+        addSpace(layout, 12)
 
-        // View info button
+        // View button
         btnViewCSV = Button(this)
-        btnViewCSV?.text = "📊 VIEW INFO"
-        btnViewCSV?.setBackgroundColor(android.graphics.Color.parseColor("#43A047"))
-        btnViewCSV?.setTextColor(android.graphics.Color.WHITE)
+        btnViewCSV?.text = "VIEW INFO"
         btnViewCSV?.setOnClickListener { viewCSVInfo() }
         layout.addView(btnViewCSV)
 
-        val space11 = Space(this)
-        space11.minimumHeight = 10
-        layout.addView(space11)
+        addSpace(layout, 8)
 
         // Share button
         btnExportCSV = Button(this)
-        btnExportCSV?.text = "📤 SHARE CSV FILES"
-        btnExportCSV?.setBackgroundColor(android.graphics.Color.parseColor("#1E88E5"))
-        btnExportCSV?.setTextColor(android.graphics.Color.WHITE)
+        btnExportCSV?.text = "SHARE CSV"
         btnExportCSV?.setOnClickListener { shareCSVFiles() }
         layout.addView(btnExportCSV)
 
-        val space12 = Space(this)
-        space12.minimumHeight = 10
-        layout.addView(space12)
+        addSpace(layout, 8)
 
-        // Clear data button
+        // Clear button
         val btnClear = Button(this)
-        btnClear.text = "🗑️ CLEAR ALL DATA"
-        btnClear.setBackgroundColor(android.graphics.Color.parseColor("#E53935"))
-        btnClear.setTextColor(android.graphics.Color.WHITE)
+        btnClear.text = "CLEAR ALL DATA"
         btnClear.setOnClickListener { clearAllData() }
         layout.addView(btnClear)
 
@@ -604,9 +548,18 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         setContentView(scrollView)
     }
 
+    private fun addSpace(layout: LinearLayout, height: Int) {
+        val space = View(this)
+        space.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (height * resources.displayMetrics.density).toInt()
+        )
+        layout.addView(space)
+    }
+
     private fun collectData(location: String, x: String, y: String) {
-        if (!wifiManager.isWifiEnabled) {
-            Toast.makeText(this, "⚠️ Turn ON WiFi!", Toast.LENGTH_LONG).show()
+        if (wifiManager?.isWifiEnabled != true) {
+            Toast.makeText(this, "Turn ON WiFi!", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -631,7 +584,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         isScanning = true
 
         btnScan?.isEnabled = false
-        tvStatus?.text = "Starting scan..."
+        tvStatus?.text = "Scanning..."
 
         saveIMUData()
         startNextScan()
@@ -644,12 +597,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
 
         try {
-            wifiManager.startScan()
+            wifiManager?.startScan()
             handler.postDelayed({
                 if (isScanning) processScanResults(false)
             }, 2000)
         } catch (e: Exception) {
-            tvStatus?.text = "Scan error: ${e.message}"
             finishScanning()
         }
     }
@@ -658,7 +610,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         if (!isScanning) return
 
         try {
-            val results = wifiManager.scanResults
+            val results = wifiManager?.scanResults ?: emptyList()
 
             if (results.isNotEmpty()) {
                 successfulScans++
@@ -666,7 +618,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 val preview = results.take(3).joinToString("\n") {
                     "${if (it.SSID.isNullOrEmpty()) "Hidden" else it.SSID}: ${it.level}dBm"
                 }
-                tvWifiList?.text = "Found ${results.size} networks:\n$preview"
+                tvWifiList?.text = "Found ${results.size}:\n$preview"
 
                 val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
 
@@ -678,12 +630,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                         }
                     }
                 }
-            } else {
-                tvWifiList?.text = "⚠️ No networks found"
             }
 
             scanCount++
-            tvStatus?.text = "Scanning... $scanCount/$targetScans"
+            tvStatus?.text = "Scan $scanCount/$targetScans"
 
             handler.postDelayed({ startNextScan() }, 500)
 
@@ -701,9 +651,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     writer.write("$timestamp,$currentLocation,$currentX,$currentY,$stepsSinceLastScan,${"%.1f".format(currentHeading)}\n")
                 }
             }
-        } catch (e: Exception) {
-            Toast.makeText(this, "IMU save error: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
+        } catch (e: Exception) {}
     }
 
     private fun finishScanning() {
@@ -711,13 +659,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         btnScan?.isEnabled = true
 
         if (successfulScans > 0) {
-            tvStatus?.text = "✓ Done! Saved $successfulScans scans, Steps: $stepsSinceLastScan"
+            tvStatus?.text = "Done! Steps: $stepsSinceLastScan"
             val total = csvFile?.let { if (it.exists()) it.readLines().size - 1 else 0 } ?: 0
             tvCount?.text = "Total samples: $total"
-            Toast.makeText(this, "✓ Success!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Success!", Toast.LENGTH_SHORT).show()
         } else {
-            tvStatus?.text = "❌ No WiFi data collected"
-            Toast.makeText(this, "Check WiFi & Location are ON", Toast.LENGTH_LONG).show()
+            tvStatus?.text = "No WiFi found"
         }
     }
 
@@ -726,8 +673,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val imuRows = imuCsvFile?.let { if (it.exists()) it.readLines().size - 1 else 0 } ?: 0
 
         AlertDialog.Builder(this)
-            .setTitle("Data Info")
-            .setMessage("WiFi samples: $wifiRows\nIMU samples: $imuRows\n\nStep sensor: $sensorType\n\nPath: ${csvFile?.parent}")
+            .setTitle("Info")
+            .setMessage("WiFi: $wifiRows\nIMU: $imuRows\nSensor: $sensorType")
             .setPositiveButton("OK", null)
             .show()
 
@@ -745,7 +692,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
 
         if (uris.isEmpty()) {
-            Toast.makeText(this, "No data to share!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "No data!", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -753,19 +700,18 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         intent.type = "text/csv"
         intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        startActivity(Intent.createChooser(intent, "Share CSV Files"))
+        startActivity(Intent.createChooser(intent, "Share"))
     }
 
     private fun clearAllData() {
         AlertDialog.Builder(this)
-            .setTitle("Clear All Data?")
-            .setMessage("This will delete all collected WiFi and IMU data.")
+            .setTitle("Clear All?")
             .setPositiveButton("Delete") { _, _ ->
                 csvFile?.delete()
                 imuCsvFile?.delete()
                 initializeCSVFiles()
                 tvCount?.text = "Total samples: 0"
-                Toast.makeText(this, "✓ All data cleared!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Cleared!", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("Cancel", null)
             .show()
@@ -778,7 +724,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         isScanning = false
         handler.removeCallbacksAndMessages(null)
         try {
-            sensorManager.unregisterListener(this)
+            sensorManager?.unregisterListener(this)
         } catch (e: Exception) {}
     }
 }
