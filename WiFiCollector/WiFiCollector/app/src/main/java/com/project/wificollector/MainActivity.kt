@@ -67,10 +67,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var stepCount = 0
     private var initialStepCounterValue = -1L
     private var sensorType = "Initializing..."
-    private var useAccelerometerFallback = false
-
-    private var lastStepTime = 0L
-    private var wasAboveThreshold = false
 
     private var isScanning = false
     private var scanCount = 0
@@ -227,57 +223,59 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
             var stepSensorStarted = false
 
+            // PRIORITY 1: TYPE_STEP_DETECTOR (real walking - instant per step)
             val stepDetector = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
             if (stepDetector != null) {
                 val registered = sensorManager?.registerListener(
                     this,
                     stepDetector,
-                    SensorManager.SENSOR_DELAY_FASTEST,
-                    0
+                    SensorManager.SENSOR_DELAY_FASTEST
                 ) ?: false
                 if (registered) {
-                    sensorType = "Step Detector"
+                    sensorType = "Step Detector ✓"
                     stepSensorStarted = true
-                    useAccelerometerFallback = false
                 }
             }
 
+            // PRIORITY 2: TYPE_STEP_COUNTER (real walking - cumulative)
             if (!stepSensorStarted) {
                 val stepCounter = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
                 if (stepCounter != null) {
                     val registered = sensorManager?.registerListener(
                         this,
                         stepCounter,
-                        SensorManager.SENSOR_DELAY_FASTEST,
-                        0
+                        SensorManager.SENSOR_DELAY_FASTEST
                     ) ?: false
                     if (registered) {
-                        sensorType = "Step Counter"
+                        sensorType = "Step Counter ✓"
                         stepSensorStarted = true
-                        useAccelerometerFallback = false
                     }
                 }
             }
 
+            // NO ACCELEROMETER FALLBACK - it counts phone shakes, not real steps
             if (!stepSensorStarted) {
-                sensorType = "Accelerometer"
-                useAccelerometerFallback = true
+                sensorType = "No Pedometer ❌"
+                Toast.makeText(this, "Your phone has no step sensor!", Toast.LENGTH_LONG).show()
             }
 
+            // Accelerometer ONLY for compass heading, NOT for steps
             val accel = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
             if (accel != null) {
-                sensorManager?.registerListener(this, accel, SensorManager.SENSOR_DELAY_FASTEST, 0)
+                sensorManager?.registerListener(this, accel, SensorManager.SENSOR_DELAY_GAME)
             }
 
+            // Magnetometer for compass heading
             val mag = sensorManager?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
             if (mag != null) {
-                sensorManager?.registerListener(this, mag, SensorManager.SENSOR_DELAY_FASTEST, 0)
+                sensorManager?.registerListener(this, mag, SensorManager.SENSOR_DELAY_GAME)
             }
 
             tvSensorType?.text = "Sensor: $sensorType"
             tvStatus?.text = "Ready"
 
         } catch (e: Exception) {
+            tvStatus?.text = "Sensor error"
             Toast.makeText(this, "Sensor error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
@@ -286,9 +284,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         try {
             when (event.sensor.type) {
                 Sensor.TYPE_STEP_DETECTOR -> {
+                    // Real step detected by hardware pedometer
                     stepCount++
                 }
                 Sensor.TYPE_STEP_COUNTER -> {
+                    // Cumulative steps from hardware pedometer
                     val totalSteps = event.values[0].toLong()
                     if (initialStepCounterValue == -1L) {
                         initialStepCounterValue = totalSteps - stepCount
@@ -296,10 +296,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     stepCount = (totalSteps - initialStepCounterValue).toInt()
                 }
                 Sensor.TYPE_ACCELEROMETER -> {
+                    // ONLY for compass heading, NOT for step counting
                     gravity = event.values.clone()
-                    if (useAccelerometerFallback) {
-                        detectStepFromAccelerometer(event.values)
-                    }
                     updateHeading()
                 }
                 Sensor.TYPE_MAGNETIC_FIELD -> {
@@ -308,21 +306,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 }
             }
         } catch (e: Exception) {}
-    }
-
-    private fun detectStepFromAccelerometer(values: FloatArray) {
-        val magnitude = sqrt(values[0] * values[0] + values[1] * values[1] + values[2] * values[2])
-        val currentTime = System.currentTimeMillis()
-
-        val threshold = 11.0f
-        val isAbove = magnitude > threshold
-
-        if (isAbove && !wasAboveThreshold && (currentTime - lastStepTime) > 350) {
-            stepCount++
-            lastStepTime = currentTime
-        }
-
-        wasAboveThreshold = isAbove
     }
 
     private fun updateHeading() {
@@ -413,7 +396,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         // Sensor info
         tvSensorType = TextView(this)
         tvSensorType?.text = "Sensor: Initializing..."
-        tvSensorType?.textSize = 12f
+        tvSensorType?.textSize = 14f
         layout.addView(tvSensorType)
 
         addSpace(layout, 16)
@@ -421,7 +404,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         // IMU Status
         tvIMUStatus = TextView(this)
         tvIMUStatus?.text = "Steps: 0 | 0° (N)"
-        tvIMUStatus?.textSize = 20f
+        tvIMUStatus?.textSize = 22f
         tvIMUStatus?.gravity = Gravity.CENTER
         tvIMUStatus?.setPadding(16, 24, 16, 24)
         tvIMUStatus?.setBackgroundColor(0xFFFF9800.toInt())
@@ -674,7 +657,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         AlertDialog.Builder(this)
             .setTitle("Info")
-            .setMessage("WiFi: $wifiRows\nIMU: $imuRows\nSensor: $sensorType")
+            .setMessage("WiFi: $wifiRows rows\nIMU: $imuRows rows\nSensor: $sensorType")
             .setPositiveButton("OK", null)
             .show()
 
