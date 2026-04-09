@@ -10,10 +10,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.net.Uri
 import android.net.wifi.WifiManager
-import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.Settings
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -41,18 +38,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var tvWifiList: TextView
     private lateinit var tvIMUStatus: TextView
     
+    // Use app-specific directory (no special permission needed)
     private val csvFile by lazy {
-        File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "wifi_fingerprints.csv"
-        )
+        File(getExternalFilesDir(null), "wifi_fingerprints.csv")
     }
     
     private val imuCsvFile by lazy {
-        File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-            "imu_data.csv"
-        )
+        File(getExternalFilesDir(null), "imu_data.csv")
     }
     
     private var stepCount = 0
@@ -68,52 +60,27 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         
-        requestAllPermissions()
+        // Only request location permission (needed for WiFi scanning)
+        requestLocationPermission()
+        
         initializeCSVFiles()
         createUI()
         startIMUTracking()
     }
     
-    private fun requestAllPermissions() {
-        val permissions = mutableListOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_WIFI_STATE,
-            Manifest.permission.CHANGE_WIFI_STATE
-        )
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            permissions.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-        }
-        
-        val notGranted = permissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        
-        if (notGranted.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, notGranted.toTypedArray(), 1)
-        }
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                try {
-                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                    intent.data = Uri.parse("package:$packageName")
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
-                    startActivity(intent)
-                }
-            }
+    private fun requestLocationPermission() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                1
+            )
         }
     }
     
     private fun initializeCSVFiles() {
         try {
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            if (!downloadsDir.exists()) {
-                downloadsDir.mkdirs()
-            }
-            
             if (!csvFile.exists()) {
                 FileWriter(csvFile, false).use { writer ->
                     writer.write("Timestamp,Location,X,Y,BSSID,SSID,RSSI,Frequency\n")
@@ -129,7 +96,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             }
             
             runOnUiThread {
-                Toast.makeText(this, "CSV files ready in Downloads", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "CSV files ready", Toast.LENGTH_SHORT).show()
             }
             
         } catch (e: Exception) {
@@ -315,10 +282,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     
     private fun viewAndSaveCSV() {
         try {
-            if (!csvFile.exists()) {
-                initializeCSVFiles()
-            }
-            
             val wifiExists = csvFile.exists()
             val imuExists = imuCsvFile.exists()
             
@@ -337,7 +300,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 ${imuCsvFile.absolutePath}
                 Size: ${imuSize}KB
                 
-                Files are in Downloads folder!
+                Use SHARE button to export!
             """.trimIndent()
             
             Toast.makeText(this, message, Toast.LENGTH_LONG).show()
@@ -448,7 +411,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 
                 Toast.makeText(
                     this@MainActivity,
-                    "Data saved to Downloads!\nWiFi: wifi_fingerprints.csv\nIMU: imu_data.csv",
+                    "Data saved!\nLocation: $location\nUse SHARE button to export",
                     Toast.LENGTH_LONG
                 ).show()
             }
