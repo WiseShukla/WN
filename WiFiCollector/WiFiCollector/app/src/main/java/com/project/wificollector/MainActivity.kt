@@ -20,7 +20,6 @@ import java.io.File
 import java.io.FileWriter
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.math.sqrt
 
 class MainActivity : AppCompatActivity(), SensorEventListener {
 
@@ -41,11 +40,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var csvFile: File? = null
     private var imuCsvFile: File? = null
     
-    // IMU tracking - AUTOMATICALLY HANDLES A/B WINGS!
-    private var stepCount = 0
-    private var lastAccel = 0f
-    private var currentAccel = 0f
-    private var currentHeading = 0.0  // ← This distinguishes LEFT (270°) vs RIGHT (90°)
+    // STEP COUNTER (Hardware Pedometer)
+    private var stepSensor: Sensor? = null
+    private var initialStepCount = -1  // Steps at app start
+    private var lastSavedStepCount = 0  // Steps at last scan
+    private var currentTotalSteps = 0   // Current total steps from sensor
+    
+    // HEADING (Compass)
+    private var magnetometer: Sensor? = null
+    private var accelerometer: Sensor? = null
+    private var currentHeading = 0.0
     private var gravity = FloatArray(3)
     private var geomagnetic = FloatArray(3)
 
@@ -68,9 +72,21 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 )
             }
             
+            // Request Activity Recognition permission for step counter (Android 10+)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION)
+                    != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(
+                        this,
+                        arrayOf(Manifest.permission.ACTIVITY_RECOGNITION),
+                        2
+                    )
+                }
+            }
+            
             initializeCSVFiles()
             createUI()
-            startIMUTracking()
+            startSensors()
             
         } catch (e: Exception) {
             Toast.makeText(this, "Startup error: ${e.message}", Toast.LENGTH_LONG).show()
@@ -92,7 +108,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             imuCsvFile?.let { file ->
                 if (!file.exists()) {
                     FileWriter(file, false).use { writer ->
-                        // ← HEADING COLUMN CAPTURES DIRECTION (A wing vs B wing)
                         writer.write("Timestamp,Location,X,Y,Steps,Heading\n")
                         writer.flush()
                     }
@@ -165,12 +180,23 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 20 })
         
-        // IMU Status - Shows HEADING (direction you're facing)
-        // This automatically shows if you're facing LEFT (270°) or RIGHT (90°)
+        TextView(this).apply {
+            text = "IMU Sensors:"
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            layout.addView(this)
+        }
+        
         tvIMUStatus = TextView(this).apply {
-            text = "IMU: Steps=0, Heading=0"
+            text = "Steps=0, Heading=0° (North)"
             textSize = 16f
             setTextColor(android.graphics.Color.parseColor("#FF6B35"))
+            layout.addView(this)
+        }
+        
+        TextView(this).apply {
+            text = "0°=North, 90°=East, 180°=South, 270°=West"
+            textSize = 12f
+            setTextColor(android.graphics.Color.GRAY)
             layout.addView(this)
         }
         
@@ -261,16 +287,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             val wifiRows = csvFile?.let { if (it.exists()) it.readLines().size - 1 else 0 } ?: 0
             val imuRows = imuCsvFile?.let { if (it.exists()) it.readLines().size - 1 else 0 } ?: 0
             
+            val stepSensorAvailable = stepSensor != null
+            
             val message = """
                 WiFi Data: $wifiRows rows
                 IMU Data: $imuRows rows
                 
-                Location:
-                ${csvFile?.absolutePath}
-                
-                Heading data automatically captures:
-                - LEFT turn to A wing (~270 degrees)
-                - RIGHT turn to B wing (~90 degrees)
+                Hardware Pedometer: ${if (stepSensorAvailable) "Available" else "Not Available"}
                 
                 Use SHARE button to export!
             """.trimIndent()
@@ -311,19 +334,20 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             startActivity(Intent.createChooser(intent, "Share CSV Files"))
             
         } catch (e: Exception) {
-            Toast.makeText(this, "Share error: ${e.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Share error: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
     
     private fun collectData(location: String, x: String, y: String) {
-        // ============================================
-        // CRITICAL: RESET STEPS (NOT HEADING!)
-        // - Steps reset to measure distance between locations
-        // - Heading KEEPS tracking so you know direction
-        //   (LEFT=270° for A wing, RIGHT=90° for B wing)
-        // ============================================
-        stepCount = 0
-        updateIMUDisplay()
+        // Calculate steps since last scan
+        val stepsSinceLastScan = if (initialStepCount == -1) {
+            0  // First scan, no steps yet
+        } else {
+            currentTotalSteps - lastSavedStepCount
+        }
+        
+        // Update last saved step count for next scan
+        lastSavedStepCount = currentTotalSteps
         
         btnScan?.isEnabled = false
         tvStatus?.text = "Scanning..."
@@ -358,19 +382,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                         }
                     }
                     
-                    // ============================================
-                    // SAVE IMU DATA WITH HEADING
-                    // This line captures BOTH:
-                    // - stepCount: distance walked
-                    // - currentHeading: direction faced
-                    //   (automatically distinguishes A/B wings!)
-                    // ============================================
+                    // Save IMU data (steps since last scan + current heading)
                     imuCsvFile?.let { file ->
                         FileWriter(file, true).use { writer ->
-                            writer.write("$timestamp,$location,$x,$y,$stepCount,${"%.1f".format(currentHeading)}\n")
-                            //                                    ↑ Steps    ↑ Heading (0-360°)
-                            //                                               270° = LEFT (A wing)
-                            //                                               90° = RIGHT (B wing)
+                            writer.write("$timestamp,$location,$x,$y,$stepsSinceLastScan,${"%.1f".format(currentHeading)}\n")
                             writer.flush()
                         }
                     }
@@ -381,11 +396,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 }
                 
                 runOnUiThread {
-                    tvStatus?.text = "Saved! Walk to next location"
+                    tvStatus?.text = "Saved! Steps=$stepsSinceLastScan"
                     btnScan?.isEnabled = true
                     val total = csvFile?.let { if (it.exists()) it.readLines().size - 1 else 0 } ?: 0
                     tvCount?.text = "Total samples: $total"
-                    Toast.makeText(this, "Steps reset. Heading still tracking!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Walked $stepsSinceLastScan steps to this location!", Toast.LENGTH_LONG).show()
                 }
                 
             } catch (e: Exception) {
@@ -398,57 +413,80 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }.start()
     }
     
-    private fun startIMUTracking() {
+    private fun startSensors() {
         try {
-            val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-            val magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+            // ============================================
+            // HARDWARE PEDOMETER (TYPE_STEP_COUNTER)
+            // Much more accurate than accelerometer!
+            // ============================================
+            stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
             
-            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
+            if (stepSensor != null) {
+                sensorManager.registerListener(this, stepSensor, SensorManager.SENSOR_DELAY_NORMAL)
+                Toast.makeText(this, "Hardware pedometer active!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "No hardware pedometer. Steps may be inaccurate.", Toast.LENGTH_LONG).show()
+            }
+            
+            // ============================================
+            // MAGNETOMETER + ACCELEROMETER (For Heading)
+            // ============================================
+            magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+            accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            
             sensorManager.registerListener(this, magnetometer, SensorManager.SENSOR_DELAY_NORMAL)
+            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
+            
         } catch (e: Exception) {
-            // IMU optional
+            Toast.makeText(this, "Sensor error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
     
     override fun onSensorChanged(event: SensorEvent) {
         try {
             when (event.sensor.type) {
+                // ============================================
+                // STEP COUNTER (Hardware Pedometer)
+                // Returns total steps since device reboot
+                // ============================================
+                Sensor.TYPE_STEP_COUNTER -> {
+                    val totalSteps = event.values[0].toInt()
+                    
+                    // First time getting step data
+                    if (initialStepCount == -1) {
+                        initialStepCount = totalSteps
+                        lastSavedStepCount = totalSteps
+                    }
+                    
+                    currentTotalSteps = totalSteps
+                    
+                    // Calculate steps since last scan
+                    val stepsSinceLastScan = currentTotalSteps - lastSavedStepCount
+                    
+                    updateIMUDisplay(stepsSinceLastScan)
+                }
+                
+                // ============================================
+                // ACCELEROMETER (For heading calculation)
+                // ============================================
                 Sensor.TYPE_ACCELEROMETER -> {
                     gravity = event.values.clone()
-                    detectStep(event.values)
+                    updateHeading()
                 }
+                
+                // ============================================
+                // MAGNETOMETER (For heading calculation)
+                // ============================================
                 Sensor.TYPE_MAGNETIC_FIELD -> {
                     geomagnetic = event.values.clone()
-                    updateHeading()  // ← Continuously updates heading (A/B wing detection)
+                    updateHeading()
                 }
             }
         } catch (e: Exception) {
-            // Ignore
+            // Ignore sensor errors
         }
     }
     
-    private fun detectStep(values: FloatArray) {
-        val x = values[0]
-        val y = values[1]
-        val z = values[2]
-        
-        lastAccel = currentAccel
-        currentAccel = sqrt(x * x + y * y + z * z)
-        
-        if (currentAccel - lastAccel > 6.0f) {
-            stepCount++
-            updateIMUDisplay()
-        }
-    }
-    
-    // ============================================
-    // UPDATE HEADING - THIS IS HOW A/B WINGS WORK!
-    // Magnetometer continuously tracks which direction
-    // you're facing:
-    // - 0° = North (straight from elevator)
-    // - 90° = East (RIGHT turn to B wing)
-    // - 270° = West (LEFT turn to A wing)
-    // ============================================
     private fun updateHeading() {
         if (gravity.isNotEmpty() && geomagnetic.isNotEmpty()) {
             val R = FloatArray(9)
@@ -462,14 +500,22 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 currentHeading = Math.toDegrees(orientation[0].toDouble())
                 if (currentHeading < 0) currentHeading += 360
                 
-                updateIMUDisplay()
+                // Update display
+                val stepsSinceLastScan = if (initialStepCount == -1) 0 else currentTotalSteps - lastSavedStepCount
+                updateIMUDisplay(stepsSinceLastScan)
             }
         }
     }
     
-    private fun updateIMUDisplay() {
+    private fun updateIMUDisplay(steps: Int) {
         runOnUiThread {
-            tvIMUStatus?.text = "IMU: Steps=$stepCount, Heading=${currentHeading.toInt()}"
+            val direction = when {
+                currentHeading < 45 || currentHeading >= 315 -> "North"
+                currentHeading < 135 -> "East (Right)"
+                currentHeading < 225 -> "South"
+                else -> "West (Left)"
+            }
+            tvIMUStatus?.text = "Steps=$steps, Heading=${currentHeading.toInt()}° ($direction)"
         }
     }
     
