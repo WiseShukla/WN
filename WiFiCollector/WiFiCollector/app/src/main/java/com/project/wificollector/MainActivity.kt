@@ -41,10 +41,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var csvFile: File? = null
     private var imuCsvFile: File? = null
     
+    // IMU tracking - AUTOMATICALLY HANDLES A/B WINGS!
     private var stepCount = 0
     private var lastAccel = 0f
     private var currentAccel = 0f
-    private var currentHeading = 0.0
+    private var currentHeading = 0.0  // ← This distinguishes LEFT (270°) vs RIGHT (90°)
     private var gravity = FloatArray(3)
     private var geomagnetic = FloatArray(3)
 
@@ -55,11 +56,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
             sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
             
-            // Initialize file paths
             csvFile = File(getExternalFilesDir(null), "wifi_fingerprints.csv")
             imuCsvFile = File(getExternalFilesDir(null), "imu_data.csv")
             
-            // Request only location permission
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
                 ActivityCompat.requestPermissions(
@@ -93,6 +92,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             imuCsvFile?.let { file ->
                 if (!file.exists()) {
                     FileWriter(file, false).use { writer ->
+                        // ← HEADING COLUMN CAPTURES DIRECTION (A wing vs B wing)
                         writer.write("Timestamp,Location,X,Y,Steps,Heading\n")
                         writer.flush()
                     }
@@ -111,7 +111,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             setPadding(40, 40, 40, 40)
         }
         
-        // Title
         TextView(this).apply {
             text = "WiFi Data Collector"
             textSize = 24f
@@ -121,7 +120,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 20 })
         
-        // Location Name
         TextView(this).apply {
             text = "Location Name:"
             layout.addView(this)
@@ -135,7 +133,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
-        // X Coordinate
         TextView(this).apply {
             text = "X Coordinate:"
             layout.addView(this)
@@ -152,7 +149,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
-        // Y Coordinate
         TextView(this).apply {
             text = "Y Coordinate:"
             layout.addView(this)
@@ -169,15 +165,17 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 20 })
         
-        // IMU Status
+        // IMU Status - Shows HEADING (direction you're facing)
+        // This automatically shows if you're facing LEFT (270°) or RIGHT (90°)
         tvIMUStatus = TextView(this).apply {
             text = "IMU: Steps=0, Heading=0"
+            textSize = 16f
+            setTextColor(android.graphics.Color.parseColor("#FF6B35"))
             layout.addView(this)
         }
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
-        // WiFi List
         TextView(this).apply {
             text = "WiFi Networks:"
             setTypeface(null, android.graphics.Typeface.BOLD)
@@ -194,7 +192,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 20 })
         
-        // Status
         tvStatus = TextView(this).apply {
             text = "Ready to collect"
             textSize = 18f
@@ -204,7 +201,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
-        // Count
         tvCount = TextView(this).apply {
             text = "Total samples: 0"
             layout.addView(this)
@@ -212,7 +208,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 20 })
         
-        // Scan Button
         btnScan = Button(this).apply {
             text = "SCAN HERE (50X)"
             textSize = 18f
@@ -237,7 +232,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
-        // View CSV Button
         btnViewCSV = Button(this).apply {
             text = "VIEW CSV INFO"
             setBackgroundColor(android.graphics.Color.parseColor("#4CAF50"))
@@ -249,7 +243,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
-        // Share Button
         btnExportCSV = Button(this).apply {
             text = "SHARE CSV FILES"
             setBackgroundColor(android.graphics.Color.parseColor("#2196F3"))
@@ -274,6 +267,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 
                 Location:
                 ${csvFile?.absolutePath}
+                
+                Heading data automatically captures:
+                - LEFT turn to A wing (~270 degrees)
+                - RIGHT turn to B wing (~90 degrees)
                 
                 Use SHARE button to export!
             """.trimIndent()
@@ -319,6 +316,15 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     }
     
     private fun collectData(location: String, x: String, y: String) {
+        // ============================================
+        // CRITICAL: RESET STEPS (NOT HEADING!)
+        // - Steps reset to measure distance between locations
+        // - Heading KEEPS tracking so you know direction
+        //   (LEFT=270° for A wing, RIGHT=90° for B wing)
+        // ============================================
+        stepCount = 0
+        updateIMUDisplay()
+        
         btnScan?.isEnabled = false
         tvStatus?.text = "Scanning..."
         tvWifiList?.text = "Scanning WiFi..."
@@ -352,10 +358,19 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                         }
                     }
                     
-                    // Save IMU data
+                    // ============================================
+                    // SAVE IMU DATA WITH HEADING
+                    // This line captures BOTH:
+                    // - stepCount: distance walked
+                    // - currentHeading: direction faced
+                    //   (automatically distinguishes A/B wings!)
+                    // ============================================
                     imuCsvFile?.let { file ->
                         FileWriter(file, true).use { writer ->
                             writer.write("$timestamp,$location,$x,$y,$stepCount,${"%.1f".format(currentHeading)}\n")
+                            //                                    ↑ Steps    ↑ Heading (0-360°)
+                            //                                               270° = LEFT (A wing)
+                            //                                               90° = RIGHT (B wing)
                             writer.flush()
                         }
                     }
@@ -366,11 +381,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 }
                 
                 runOnUiThread {
-                    tvStatus?.text = "Saved 50 scans!"
+                    tvStatus?.text = "Saved! Walk to next location"
                     btnScan?.isEnabled = true
                     val total = csvFile?.let { if (it.exists()) it.readLines().size - 1 else 0 } ?: 0
                     tvCount?.text = "Total samples: $total"
-                    Toast.makeText(this, "Data saved at $location", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Steps reset. Heading still tracking!", Toast.LENGTH_SHORT).show()
                 }
                 
             } catch (e: Exception) {
@@ -391,7 +406,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
             sensorManager.registerListener(this, magnetometer, SensorManager.SENSOR_DELAY_NORMAL)
         } catch (e: Exception) {
-            // IMU optional - don't crash if not available
+            // IMU optional
         }
     }
     
@@ -404,11 +419,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 }
                 Sensor.TYPE_MAGNETIC_FIELD -> {
                     geomagnetic = event.values.clone()
-                    updateHeading()
+                    updateHeading()  // ← Continuously updates heading (A/B wing detection)
                 }
             }
         } catch (e: Exception) {
-            // Ignore sensor errors
+            // Ignore
         }
     }
     
@@ -426,6 +441,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
     
+    // ============================================
+    // UPDATE HEADING - THIS IS HOW A/B WINGS WORK!
+    // Magnetometer continuously tracks which direction
+    // you're facing:
+    // - 0° = North (straight from elevator)
+    // - 90° = East (RIGHT turn to B wing)
+    // - 270° = West (LEFT turn to A wing)
+    // ============================================
     private fun updateHeading() {
         if (gravity.isNotEmpty() && geomagnetic.isNotEmpty()) {
             val R = FloatArray(9)
@@ -434,8 +457,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             if (SensorManager.getRotationMatrix(R, I, gravity, geomagnetic)) {
                 val orientation = FloatArray(3)
                 SensorManager.getOrientation(R, orientation)
+                
+                // Convert radians to degrees (0-360)
                 currentHeading = Math.toDegrees(orientation[0].toDouble())
                 if (currentHeading < 0) currentHeading += 360
+                
                 updateIMUDisplay()
             }
         }
