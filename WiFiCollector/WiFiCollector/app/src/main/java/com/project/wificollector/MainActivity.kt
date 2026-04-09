@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private var etX: EditText? = null
     private var etY: EditText? = null
     private var btnScan: Button? = null
+    private var btnResetSteps: Button? = null
     private var btnViewCSV: Button? = null
     private var btnExportCSV: Button? = null
     private var tvStatus: TextView? = null
@@ -52,9 +53,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     
     // Step counter variables
     private var stepSensor: Sensor? = null
+    private var stepDetector: Sensor? = null
+    private var useStepDetector = false
     private var initialStepCount = -1
     private var lastSavedStepCount = 0
     private var currentTotalSteps = 0
+    private var stepDetectorCount = 0  // For TYPE_STEP_DETECTOR
     
     // Fallback: Accelerometer-based step detection
     private var useAccelerometer = false
@@ -70,7 +74,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // WiFi scanning variables
     private var isScanning = false
     private var scanCount = 0
-    private var targetScans = 50
+    private var targetScans = 10
     private var successfulScans = 0
     private var currentLocation = ""
     private var currentX = ""
@@ -93,7 +97,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     
     companion object {
         private const val PERMISSION_REQUEST_CODE = 1
-        private const val LOCATION_SETTINGS_REQUEST = 2
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -119,22 +122,22 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
     
- override fun onResume() {
-    super.onResume()
-    // Register WiFi scan receiver with Android 12+ compatibility
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        registerReceiver(
-            wifiScanReceiver,
-            IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
-            Context.RECEIVER_NOT_EXPORTED
-        )
-    } else {
-        registerReceiver(
-            wifiScanReceiver,
-            IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
-        )
+    override fun onResume() {
+        super.onResume()
+        // Register WiFi scan receiver with Android 12+ compatibility
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(
+                wifiScanReceiver,
+                IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
+                Context.RECEIVER_NOT_EXPORTED
+            )
+        } else {
+            registerReceiver(
+                wifiScanReceiver,
+                IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+            )
+        }
     }
-}
     
     override fun onPause() {
         super.onPause()
@@ -164,7 +167,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         if (notGranted.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, notGranted.toTypedArray(), PERMISSION_REQUEST_CODE)
         } else {
-            // All permissions already granted
             onAllPermissionsGranted()
         }
     }
@@ -178,7 +180,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 onAllPermissionsGranted()
             } else {
                 Toast.makeText(this, "Some permissions denied. App may not work properly.", Toast.LENGTH_LONG).show()
-                // Still try to start sensors that don't need denied permissions
                 startSensors()
             }
         }
@@ -301,7 +302,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         tvIMUStatus = TextView(this).apply {
             text = "Steps=0, Heading=0° (North)"
-            textSize = 16f
+            textSize = 18f
             setTextColor(android.graphics.Color.parseColor("#FF6B35"))
             layout.addView(this)
         }
@@ -314,6 +315,21 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
+        
+        // RESET STEPS BUTTON
+        btnResetSteps = Button(this).apply {
+            text = "🔄 RESET STEPS"
+            textSize = 14f
+            setBackgroundColor(android.graphics.Color.parseColor("#FF9800"))
+            setTextColor(android.graphics.Color.WHITE)
+            setPadding(20, 15, 20, 15)
+            setOnClickListener {
+                resetStepCount()
+            }
+            layout.addView(this)
+        }
+        
+        layout.addView(Space(this).apply { minimumHeight = 15 })
         
         TextView(this).apply {
             text = "WiFi Networks:"
@@ -347,9 +363,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 20 })
         
-        // Reduced scan count due to Android throttling
         btnScan = Button(this).apply {
-            text = "SCAN HERE (10X)"
+            text = "📡 SCAN HERE (10X)"
             textSize = 18f
             setPadding(30, 30, 30, 30)
             setOnClickListener {
@@ -373,8 +388,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
         btnViewCSV = Button(this).apply {
-            text = "VIEW CSV INFO"
+            text = "📊 VIEW CSV INFO"
             setBackgroundColor(android.graphics.Color.parseColor("#4CAF50"))
+            setTextColor(android.graphics.Color.WHITE)
             setOnClickListener {
                 viewCSVInfo()
             }
@@ -384,10 +400,24 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
         btnExportCSV = Button(this).apply {
-            text = "SHARE CSV FILES"
+            text = "📤 SHARE CSV FILES"
             setBackgroundColor(android.graphics.Color.parseColor("#2196F3"))
+            setTextColor(android.graphics.Color.WHITE)
             setOnClickListener {
                 shareCSVFiles()
+            }
+            layout.addView(this)
+        }
+        
+        layout.addView(Space(this).apply { minimumHeight = 10 })
+        
+        // CLEAR ALL DATA BUTTON
+        Button(this).apply {
+            text = "🗑️ CLEAR ALL DATA"
+            setBackgroundColor(android.graphics.Color.parseColor("#F44336"))
+            setTextColor(android.graphics.Color.WHITE)
+            setOnClickListener {
+                clearAllData()
             }
             layout.addView(this)
         }
@@ -396,12 +426,59 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         setContentView(scrollView)
     }
     
+    private fun resetStepCount() {
+        // Reset all step counters
+        when {
+            useStepDetector -> {
+                stepDetectorCount = 0
+            }
+            useAccelerometer -> {
+                accelStepCount = 0
+            }
+            else -> {
+                // For TYPE_STEP_COUNTER, we reset the baseline
+                lastSavedStepCount = currentTotalSteps
+            }
+        }
+        
+        updateIMUDisplay(0)
+        Toast.makeText(this, "✓ Steps reset to 0", Toast.LENGTH_SHORT).show()
+    }
+    
+    private fun clearAllData() {
+        AlertDialog.Builder(this)
+            .setTitle("Clear All Data?")
+            .setMessage("This will delete all WiFi and IMU data collected. Are you sure?")
+            .setPositiveButton("Delete") { _, _ ->
+                try {
+                    csvFile?.let { file ->
+                        if (file.exists()) file.delete()
+                    }
+                    imuCsvFile?.let { file ->
+                        if (file.exists()) file.delete()
+                    }
+                    initializeCSVFiles()
+                    tvCount?.text = "Total samples: 0"
+                    Toast.makeText(this, "✓ All data cleared!", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+    
     private fun viewCSVInfo() {
         try {
             val wifiRows = csvFile?.let { if (it.exists()) it.readLines().size - 1 else 0 } ?: 0
             val imuRows = imuCsvFile?.let { if (it.exists()) it.readLines().size - 1 else 0 } ?: 0
             
-            val stepSensorStatus = if (stepSensor != null) "Hardware Pedometer ✓" else if (useAccelerometer) "Accelerometer (Fallback)" else "Not available ❌"
+            val stepSensorStatus = when {
+                useStepDetector -> "Step Detector ✓ (Real-time)"
+                stepSensor != null -> "Step Counter ✓ (Batched)"
+                useAccelerometer -> "Accelerometer (Fallback)"
+                else -> "Not available ❌"
+            }
             val wifiStatus = if (wifiManager.isWifiEnabled) "ON ✓" else "OFF ❌"
             val locationStatus = if (checkLocationServicesQuiet()) "ON ✓" else "OFF ❌"
             
@@ -436,7 +513,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     
     private fun shareCSVFiles() {
         try {
-            if (csvFile?.exists() != true || imuCsvFile?.exists() != true) {
+            if (csvFile?.exists() != true && imuCsvFile?.exists() != true) {
                 Toast.makeText(this, "No data collected yet!", Toast.LENGTH_SHORT).show()
                 return
             }
@@ -444,13 +521,22 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             val uris = ArrayList<Uri>()
             
             csvFile?.let {
-                val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", it)
-                uris.add(uri)
+                if (it.exists()) {
+                    val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", it)
+                    uris.add(uri)
+                }
             }
             
             imuCsvFile?.let {
-                val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", it)
-                uris.add(uri)
+                if (it.exists()) {
+                    val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", it)
+                    uris.add(uri)
+                }
+            }
+            
+            if (uris.isEmpty()) {
+                Toast.makeText(this, "No files to share!", Toast.LENGTH_SHORT).show()
+                return
             }
             
             val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
@@ -473,7 +559,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             return
         }
         
-        // CHECK LOCATION SERVICES (required for WiFi scanning on Android 9+)
+        // CHECK LOCATION SERVICES
         if (!checkLocationServices()) {
             return
         }
@@ -486,20 +572,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             return
         }
         
-        // Calculate steps since last scan
-        stepsSinceLastScan = if (useAccelerometer) {
-            val steps = accelStepCount
-            accelStepCount = 0  // Reset for next segment
-            steps
-        } else {
-            if (initialStepCount == -1) {
-                0
-            } else {
-                val steps = currentTotalSteps - lastSavedStepCount
-                lastSavedStepCount = currentTotalSteps
-                steps
-            }
-        }
+        // Get current steps and reset for next segment
+        stepsSinceLastScan = getCurrentSteps()
+        resetStepCountInternal()
         
         // Store current values
         currentLocation = location
@@ -509,7 +584,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         // Reset scan counters
         scanCount = 0
         successfulScans = 0
-        targetScans = 10  // Reduced from 50 due to Android throttling
+        targetScans = 10
         isScanning = true
         
         btnScan?.isEnabled = false
@@ -523,6 +598,25 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         startNextScan()
     }
     
+    private fun getCurrentSteps(): Int {
+        return when {
+            useStepDetector -> stepDetectorCount
+            useAccelerometer -> accelStepCount
+            else -> {
+                if (initialStepCount == -1) 0 
+                else currentTotalSteps - lastSavedStepCount
+            }
+        }
+    }
+    
+    private fun resetStepCountInternal() {
+        when {
+            useStepDetector -> stepDetectorCount = 0
+            useAccelerometer -> accelStepCount = 0
+            else -> lastSavedStepCount = currentTotalSteps
+        }
+    }
+    
     private fun startNextScan() {
         if (!isScanning || scanCount >= targetScans) {
             finishScanning()
@@ -534,12 +628,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             
             if (!scanStarted) {
                 tvWifiList?.text = "⚠️ Scan throttled by Android. Using cached results..."
-                // On throttle, still read cached results
                 handler.postDelayed({
                     processScanResults(false)
                 }, 500)
             }
-            // If scan started, wait for broadcast receiver
             
             // Timeout in case broadcast never arrives
             handler.postDelayed({
@@ -563,14 +655,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             if (results.isNotEmpty()) {
                 successfulScans++
                 
-                // Update UI with preview
                 val preview = results.take(3).joinToString("\n") { 
                     val ssid = if (it.SSID.isNullOrEmpty()) "Hidden" else it.SSID
                     "$ssid: ${it.level}dBm"
                 }
                 tvWifiList?.text = "Found ${results.size} networks:\n$preview"
                 
-                // Save to CSV
                 val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
                 
                 csvFile?.let { file ->
@@ -589,7 +679,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             scanCount++
             tvStatus?.text = "Scanning... $scanCount/$targetScans (${if (freshResults) "fresh" else "cached"})"
             
-            // Wait before next scan (Android throttles to ~4 scans per 2 minutes)
             val delay = if (freshResults) 2000L else 500L
             handler.postDelayed({
                 startNextScan()
@@ -636,37 +725,36 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     
     private fun startSensors() {
         try {
-            // Try hardware pedometer first
-            stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+            // Priority 1: TYPE_STEP_DETECTOR (real-time, instant feedback)
+            stepDetector = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
             
-            if (stepSensor != null) {
+            if (stepDetector != null) {
                 val registered = sensorManager.registerListener(
                     this, 
-                    stepSensor, 
-                    SensorManager.SENSOR_DELAY_NORMAL
+                    stepDetector, 
+                    SensorManager.SENSOR_DELAY_FASTEST
                 )
                 if (registered) {
+                    useStepDetector = true
                     useAccelerometer = false
-                    Toast.makeText(this, "✓ Hardware pedometer active!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "✓ Step Detector active (real-time)!", Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(this, "⚠️ Failed to register step sensor", Toast.LENGTH_SHORT).show()
-                    setupAccelerometerFallback()
+                    tryStepCounter()
                 }
             } else {
-                Toast.makeText(this, "⚠️ No hardware pedometer found", Toast.LENGTH_SHORT).show()
-                setupAccelerometerFallback()
+                tryStepCounter()
             }
             
-            // Start accelerometer for heading (always needed)
+            // Accelerometer for heading
             val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
             if (accelerometer != null) {
-                sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
+                sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
             }
             
-            // Start magnetometer for heading
+            // Magnetometer for heading
             val magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
             if (magnetometer != null) {
-                sensorManager.registerListener(this, magnetometer, SensorManager.SENSOR_DELAY_NORMAL)
+                sensorManager.registerListener(this, magnetometer, SensorManager.SENSOR_DELAY_GAME)
             }
             
         } catch (e: Exception) {
@@ -674,14 +762,43 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
     
+    private fun tryStepCounter() {
+        // Priority 2: TYPE_STEP_COUNTER (batched, may have delay)
+        stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        
+        if (stepSensor != null) {
+            val registered = sensorManager.registerListener(
+                this, 
+                stepSensor, 
+                SensorManager.SENSOR_DELAY_FASTEST
+            )
+            if (registered) {
+                useStepDetector = false
+                useAccelerometer = false
+                Toast.makeText(this, "✓ Step Counter active (may have slight delay)", Toast.LENGTH_SHORT).show()
+            } else {
+                setupAccelerometerFallback()
+            }
+        } else {
+            setupAccelerometerFallback()
+        }
+    }
+    
     private fun setupAccelerometerFallback() {
+        useStepDetector = false
         useAccelerometer = true
-        Toast.makeText(this, "Using accelerometer for step detection", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "⚠️ Using accelerometer for steps (less accurate)", Toast.LENGTH_LONG).show()
     }
     
     override fun onSensorChanged(event: SensorEvent) {
         try {
             when (event.sensor.type) {
+                Sensor.TYPE_STEP_DETECTOR -> {
+                    // Each event = 1 step detected instantly!
+                    stepDetectorCount++
+                    updateIMUDisplay(stepDetectorCount)
+                }
+                
                 Sensor.TYPE_STEP_COUNTER -> {
                     val totalSteps = event.values[0].toInt()
                     
@@ -691,15 +808,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                     }
                     
                     currentTotalSteps = totalSteps
-                    val stepsSinceLastScan = currentTotalSteps - lastSavedStepCount
-                    
-                    updateIMUDisplay(stepsSinceLastScan)
+                    val steps = currentTotalSteps - lastSavedStepCount
+                    updateIMUDisplay(steps)
                 }
                 
                 Sensor.TYPE_ACCELEROMETER -> {
                     gravity = event.values.clone()
                     
-                    // If using accelerometer for steps
                     if (useAccelerometer) {
                         detectStepFromAccel(event.values)
                     }
@@ -713,14 +828,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 }
             }
         } catch (e: Exception) {
-            // Ignore sensor errors
+            // Ignore
         }
     }
     
     private fun detectStepFromAccel(values: FloatArray) {
         val currentTime = System.currentTimeMillis()
         
-        // Minimum time between steps (prevents double counting)
         if (currentTime - lastStepTime < 300) {
             return
         }
@@ -728,7 +842,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         val magnitude = sqrt(values[0] * values[0] + values[1] * values[1] + values[2] * values[2])
         val delta = kotlin.math.abs(magnitude - lastAccelMagnitude)
         
-        // Threshold for step detection (may need tuning for your device)
         if (delta > 3.5f && magnitude > 8.0f && magnitude < 15.0f) {
             accelStepCount++
             lastStepTime = currentTime
@@ -749,11 +862,6 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                 
                 currentHeading = Math.toDegrees(orientation[0].toDouble())
                 if (currentHeading < 0) currentHeading += 360
-                
-                val steps = if (useAccelerometer) accelStepCount else {
-                    if (initialStepCount == -1) 0 else currentTotalSteps - lastSavedStepCount
-                }
-                updateIMUDisplay(steps)
             }
         }
     }
@@ -761,12 +869,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private fun updateIMUDisplay(steps: Int) {
         handler.post {
             val direction = when {
-                currentHeading < 45 || currentHeading >= 315 -> "North"
-                currentHeading < 135 -> "East"
-                currentHeading < 225 -> "South"
-                else -> "West"
+                currentHeading < 45 || currentHeading >= 315 -> "N"
+                currentHeading < 135 -> "E"
+                currentHeading < 225 -> "S"
+                else -> "W"
             }
-            tvIMUStatus?.text = "Steps=$steps, Heading=${currentHeading.toInt()}° ($direction)"
+            tvIMUStatus?.text = "Steps=$steps | Heading=${currentHeading.toInt()}° ($direction)"
         }
     }
     
