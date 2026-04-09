@@ -119,14 +119,22 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         }
     }
     
-    override fun onResume() {
-        super.onResume()
-        // Register WiFi scan receiver
+ override fun onResume() {
+    super.onResume()
+    // Register WiFi scan receiver with Android 12+ compatibility
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        registerReceiver(
+            wifiScanReceiver,
+            IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
+            Context.RECEIVER_NOT_EXPORTED
+        )
+    } else {
         registerReceiver(
             wifiScanReceiver,
             IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
         )
     }
+}
     
     override fun onPause() {
         super.onPause()
