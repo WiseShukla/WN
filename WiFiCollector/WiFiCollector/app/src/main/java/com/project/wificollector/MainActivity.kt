@@ -27,25 +27,19 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var wifiManager: WifiManager
     private lateinit var sensorManager: SensorManager
     
-    private lateinit var etLocationName: EditText
-    private lateinit var etX: EditText
-    private lateinit var etY: EditText
-    private lateinit var btnScan: Button
-    private lateinit var btnViewCSV: Button
-    private lateinit var btnExportCSV: Button
-    private lateinit var tvStatus: TextView
-    private lateinit var tvCount: TextView
-    private lateinit var tvWifiList: TextView
-    private lateinit var tvIMUStatus: TextView
+    private var etLocationName: EditText? = null
+    private var etX: EditText? = null
+    private var etY: EditText? = null
+    private var btnScan: Button? = null
+    private var btnViewCSV: Button? = null
+    private var btnExportCSV: Button? = null
+    private var tvStatus: TextView? = null
+    private var tvCount: TextView? = null
+    private var tvWifiList: TextView? = null
+    private var tvIMUStatus: TextView? = null
     
-    // Use app-specific directory (no special permission needed)
-    private val csvFile by lazy {
-        File(getExternalFilesDir(null), "wifi_fingerprints.csv")
-    }
-    
-    private val imuCsvFile by lazy {
-        File(getExternalFilesDir(null), "imu_data.csv")
-    }
+    private var csvFile: File? = null
+    private var imuCsvFile: File? = null
     
     private var stepCount = 0
     private var lastAccel = 0f
@@ -57,142 +51,142 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        
-        // Only request location permission (needed for WiFi scanning)
-        requestLocationPermission()
-        
-        initializeCSVFiles()
-        createUI()
-        startIMUTracking()
-    }
-    
-    private fun requestLocationPermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-            != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
-                1
-            )
+        try {
+            wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+            
+            // Initialize file paths
+            csvFile = File(getExternalFilesDir(null), "wifi_fingerprints.csv")
+            imuCsvFile = File(getExternalFilesDir(null), "imu_data.csv")
+            
+            // Request only location permission
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                    1
+                )
+            }
+            
+            initializeCSVFiles()
+            createUI()
+            startIMUTracking()
+            
+        } catch (e: Exception) {
+            Toast.makeText(this, "Startup error: ${e.message}", Toast.LENGTH_LONG).show()
+            e.printStackTrace()
         }
     }
     
     private fun initializeCSVFiles() {
         try {
-            if (!csvFile.exists()) {
-                FileWriter(csvFile, false).use { writer ->
-                    writer.write("Timestamp,Location,X,Y,BSSID,SSID,RSSI,Frequency\n")
-                    writer.flush()
+            csvFile?.let { file ->
+                if (!file.exists()) {
+                    FileWriter(file, false).use { writer ->
+                        writer.write("Timestamp,Location,X,Y,BSSID,SSID,RSSI,Frequency\n")
+                        writer.flush()
+                    }
                 }
             }
             
-            if (!imuCsvFile.exists()) {
-                FileWriter(imuCsvFile, false).use { writer ->
-                    writer.write("Timestamp,Location,X,Y,Steps,Heading\n")
-                    writer.flush()
+            imuCsvFile?.let { file ->
+                if (!file.exists()) {
+                    FileWriter(file, false).use { writer ->
+                        writer.write("Timestamp,Location,X,Y,Steps,Heading\n")
+                        writer.flush()
+                    }
                 }
-            }
-            
-            runOnUiThread {
-                Toast.makeText(this, "CSV files ready", Toast.LENGTH_SHORT).show()
             }
             
         } catch (e: Exception) {
-            runOnUiThread {
-                Toast.makeText(this, "Error creating files: ${e.message}", Toast.LENGTH_LONG).show()
-            }
+            Toast.makeText(this, "CSV init error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
     
     private fun createUI() {
+        val scrollView = ScrollView(this)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 40, 40, 40)
         }
         
+        // Title
         TextView(this).apply {
             text = "WiFi Data Collector"
-            textSize = 28f
+            textSize = 24f
             setTypeface(null, android.graphics.Typeface.BOLD)
             layout.addView(this)
         }
         
         layout.addView(Space(this).apply { minimumHeight = 20 })
         
+        // Location Name
         TextView(this).apply {
             text = "Location Name:"
-            textSize = 16f
             layout.addView(this)
         }
         
         etLocationName = EditText(this).apply {
             hint = "e.g., elevator_exit"
-            textSize = 18f
             setPadding(20, 20, 20, 20)
+            layout.addView(this)
         }
-        layout.addView(etLocationName)
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
+        // X Coordinate
         TextView(this).apply {
-            text = "X Coordinate (meters):"
-            textSize = 16f
+            text = "X Coordinate:"
             layout.addView(this)
         }
         
         etX = EditText(this).apply {
-            hint = "e.g., 0"
+            hint = "0"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or 
                         android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or
                         android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
-            textSize = 18f
             setPadding(20, 20, 20, 20)
+            layout.addView(this)
         }
-        layout.addView(etX)
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
+        // Y Coordinate
         TextView(this).apply {
-            text = "Y Coordinate (meters):"
-            textSize = 16f
+            text = "Y Coordinate:"
             layout.addView(this)
         }
         
         etY = EditText(this).apply {
-            hint = "e.g., 0"
+            hint = "0"
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or 
                         android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL or
                         android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
-            textSize = 18f
             setPadding(20, 20, 20, 20)
+            layout.addView(this)
         }
-        layout.addView(etY)
         
         layout.addView(Space(this).apply { minimumHeight = 20 })
         
+        // IMU Status
         tvIMUStatus = TextView(this).apply {
-            text = "IMU: Steps=0, Heading=0 degrees"
-            textSize = 16f
-            setTextColor(android.graphics.Color.parseColor("#FF6B35"))
+            text = "IMU: Steps=0, Heading=0"
             layout.addView(this)
         }
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
+        // WiFi List
         TextView(this).apply {
-            text = "WiFi Networks Detected:"
-            textSize = 16f
+            text = "WiFi Networks:"
             setTypeface(null, android.graphics.Typeface.BOLD)
             layout.addView(this)
         }
         
         tvWifiList = TextView(this).apply {
             text = "Scan to see networks..."
-            textSize = 14f
-            setTextColor(android.graphics.Color.DKGRAY)
-            maxLines = 8
+            maxLines = 6
             setPadding(10, 10, 10, 10)
             setBackgroundColor(android.graphics.Color.parseColor("#F0F0F0"))
             layout.addView(this)
@@ -200,32 +194,33 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         
         layout.addView(Space(this).apply { minimumHeight = 20 })
         
+        // Status
         tvStatus = TextView(this).apply {
             text = "Ready to collect"
-            textSize = 20f
+            textSize = 18f
             setTextColor(android.graphics.Color.BLUE)
+            layout.addView(this)
         }
-        layout.addView(tvStatus)
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
+        // Count
         tvCount = TextView(this).apply {
-            text = "Total samples: ${countTotalSamples()}"
-            textSize = 16f
+            text = "Total samples: 0"
+            layout.addView(this)
         }
-        layout.addView(tvCount)
         
         layout.addView(Space(this).apply { minimumHeight = 20 })
         
+        // Scan Button
         btnScan = Button(this).apply {
             text = "SCAN HERE (50X)"
-            textSize = 20f
-            setPadding(40, 40, 40, 40)
-            
+            textSize = 18f
+            setPadding(30, 30, 30, 30)
             setOnClickListener {
-                val location = etLocationName.text.toString().trim()
-                val x = etX.text.toString().trim()
-                val y = etY.text.toString().trim()
+                val location = etLocationName?.text?.toString()?.trim() ?: ""
+                val x = etX?.text?.toString()?.trim() ?: ""
+                val y = etY?.text?.toString()?.trim() ?: ""
                 
                 if (location.isEmpty() || x.isEmpty() || y.isEmpty()) {
                     Toast.makeText(
@@ -233,27 +228,28 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
                         "Please fill all fields!",
                         Toast.LENGTH_SHORT
                     ).show()
-                    return@setOnClickListener
+                } else {
+                    collectData(location, x, y)
                 }
-                
-                collectData(location, x, y)
-            }
-        }
-        layout.addView(btnScan)
-        
-        layout.addView(Space(this).apply { minimumHeight = 10 })
-        
-        btnViewCSV = Button(this).apply {
-            text = "VIEW CSV LOCATION"
-            setBackgroundColor(android.graphics.Color.parseColor("#4CAF50"))
-            setOnClickListener {
-                viewAndSaveCSV()
             }
             layout.addView(this)
         }
         
         layout.addView(Space(this).apply { minimumHeight = 10 })
         
+        // View CSV Button
+        btnViewCSV = Button(this).apply {
+            text = "VIEW CSV INFO"
+            setBackgroundColor(android.graphics.Color.parseColor("#4CAF50"))
+            setOnClickListener {
+                viewCSVInfo()
+            }
+            layout.addView(this)
+        }
+        
+        layout.addView(Space(this).apply { minimumHeight = 10 })
+        
+        // Share Button
         btnExportCSV = Button(this).apply {
             text = "SHARE CSV FILES"
             setBackgroundColor(android.graphics.Color.parseColor("#2196F3"))
@@ -263,85 +259,54 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             layout.addView(this)
         }
         
-        val scrollView = ScrollView(this)
         scrollView.addView(layout)
         setContentView(scrollView)
     }
     
-    private fun countTotalSamples(): Int {
-        return try {
-            if (csvFile.exists()) {
-                csvFile.readLines().size - 1
-            } else {
-                0
-            }
-        } catch (e: Exception) {
-            0
-        }
-    }
-    
-    private fun viewAndSaveCSV() {
+    private fun viewCSVInfo() {
         try {
-            val wifiExists = csvFile.exists()
-            val imuExists = imuCsvFile.exists()
-            
-            val wifiSize = if (wifiExists) csvFile.length() / 1024 else 0
-            val imuSize = if (imuExists) imuCsvFile.length() / 1024 else 0
+            val wifiRows = csvFile?.let { if (it.exists()) it.readLines().size - 1 else 0 } ?: 0
+            val imuRows = imuCsvFile?.let { if (it.exists()) it.readLines().size - 1 else 0 } ?: 0
             
             val message = """
-                CSV Files Saved!
+                WiFi Data: $wifiRows rows
+                IMU Data: $imuRows rows
                 
-                WiFi Data:
-                ${csvFile.absolutePath}
-                Size: ${wifiSize}KB
-                Rows: ${countTotalSamples()}
-                
-                IMU Data:
-                ${imuCsvFile.absolutePath}
-                Size: ${imuSize}KB
+                Location:
+                ${csvFile?.absolutePath}
                 
                 Use SHARE button to export!
             """.trimIndent()
             
             Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-            
-            tvCount.text = "Total samples: ${countTotalSamples()}"
+            tvCount?.text = "Total samples: $wifiRows"
             
         } catch (e: Exception) {
-            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
     
     private fun shareCSVFiles() {
         try {
-            if (!csvFile.exists() || !imuCsvFile.exists()) {
+            if (csvFile?.exists() != true || imuCsvFile?.exists() != true) {
                 Toast.makeText(this, "No data collected yet!", Toast.LENGTH_SHORT).show()
                 return
             }
             
+            val uris = ArrayList<Uri>()
+            
+            csvFile?.let {
+                val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", it)
+                uris.add(uri)
+            }
+            
+            imuCsvFile?.let {
+                val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", it)
+                uris.add(uri)
+            }
+            
             val intent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
                 type = "text/csv"
-                
-                val uris = ArrayList<Uri>()
-                
-                if (csvFile.exists()) {
-                    val uri = FileProvider.getUriForFile(
-                        this@MainActivity,
-                        "${packageName}.fileprovider",
-                        csvFile
-                    )
-                    uris.add(uri)
-                }
-                
-                if (imuCsvFile.exists()) {
-                    val uri = FileProvider.getUriForFile(
-                        this@MainActivity,
-                        "${packageName}.fileprovider",
-                        imuCsvFile
-                    )
-                    uris.add(uri)
-                }
-                
                 putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
@@ -349,106 +314,101 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             startActivity(Intent.createChooser(intent, "Share CSV Files"))
             
         } catch (e: Exception) {
-            Toast.makeText(this, "Error sharing files: ${e.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Share error: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
     
     private fun collectData(location: String, x: String, y: String) {
-        btnScan.isEnabled = false
-        tvStatus.text = "Scanning WiFi..."
-        tvWifiList.text = "Scanning..."
+        btnScan?.isEnabled = false
+        tvStatus?.text = "Scanning..."
+        tvWifiList?.text = "Scanning WiFi..."
         
         Thread {
-            var scansCompleted = 0
-            
-            repeat(50) { i ->
-                wifiManager.startScan()
-                Thread.sleep(200)
-                
-                val results = wifiManager.scanResults
-                
-                if (i == 0) {
+            try {
+                repeat(50) { i ->
+                    wifiManager.startScan()
+                    Thread.sleep(200)
+                    
+                    val results = wifiManager.scanResults
+                    
+                    if (i == 0) {
+                        runOnUiThread {
+                            val preview = results.take(3).joinToString("\n") { 
+                                "${it.SSID}: ${it.level}dBm"
+                            }
+                            tvWifiList?.text = "Found ${results.size}:\n$preview"
+                        }
+                    }
+                    
+                    val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+                    
+                    // Save WiFi data
+                    csvFile?.let { file ->
+                        FileWriter(file, true).use { writer ->
+                            results.forEach { ap ->
+                                writer.write("$timestamp,$location,$x,$y,${ap.BSSID},${ap.SSID},${ap.level},${ap.frequency}\n")
+                            }
+                            writer.flush()
+                        }
+                    }
+                    
+                    // Save IMU data
+                    imuCsvFile?.let { file ->
+                        FileWriter(file, true).use { writer ->
+                            writer.write("$timestamp,$location,$x,$y,$stepCount,${"%.1f".format(currentHeading)}\n")
+                            writer.flush()
+                        }
+                    }
+                    
                     runOnUiThread {
-                        val wifiText = results.take(5).joinToString("\n") { 
-                            "${it.SSID} (${it.BSSID.takeLast(8)}): ${it.level} dBm"
-                        }
-                        tvWifiList.text = "Found ${results.size} networks:\n$wifiText\n..."
+                        tvStatus?.text = "Scanning... ${i + 1}/50"
                     }
                 }
-                
-                val timestamp = SimpleDateFormat(
-                    "yyyy-MM-dd HH:mm:ss",
-                    Locale.getDefault()
-                ).format(Date())
-                
-                try {
-                    FileWriter(csvFile, true).use { writer ->
-                        results.forEach { ap ->
-                            writer.write(
-                                "$timestamp,$location,$x,$y,${ap.BSSID},${ap.SSID},${ap.level},${ap.frequency}\n"
-                            )
-                        }
-                        writer.flush()
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("WiFiCollector", "Error writing WiFi data", e)
-                }
-                
-                saveIMUData(timestamp, location, x, y)
-                
-                scansCompleted++
                 
                 runOnUiThread {
-                    tvStatus.text = "Scanning... $scansCompleted/50"
+                    tvStatus?.text = "Saved 50 scans!"
+                    btnScan?.isEnabled = true
+                    val total = csvFile?.let { if (it.exists()) it.readLines().size - 1 else 0 } ?: 0
+                    tvCount?.text = "Total samples: $total"
+                    Toast.makeText(this, "Data saved at $location", Toast.LENGTH_SHORT).show()
                 }
-            }
-            
-            runOnUiThread {
-                tvStatus.text = "Saved 50 scans at $location"
-                btnScan.isEnabled = true
                 
-                tvCount.text = "Total samples: ${countTotalSamples()}"
-                
-                Toast.makeText(
-                    this@MainActivity,
-                    "Data saved!\nLocation: $location\nUse SHARE button to export",
-                    Toast.LENGTH_LONG
-                ).show()
+            } catch (e: Exception) {
+                runOnUiThread {
+                    tvStatus?.text = "Error: ${e.message}"
+                    btnScan?.isEnabled = true
+                    Toast.makeText(this, "Scan error: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             }
         }.start()
     }
     
-    private fun saveIMUData(timestamp: String, location: String, x: String, y: String) {
+    private fun startIMUTracking() {
         try {
-            FileWriter(imuCsvFile, true).use { writer ->
-                writer.write(
-                    "$timestamp,$location,$x,$y,$stepCount,${"%.1f".format(currentHeading)}\n"
-                )
-                writer.flush()
-            }
+            val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            val magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+            
+            sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
+            sensorManager.registerListener(this, magnetometer, SensorManager.SENSOR_DELAY_NORMAL)
         } catch (e: Exception) {
-            android.util.Log.e("WiFiCollector", "Error writing IMU data", e)
+            // IMU optional - don't crash if not available
         }
     }
     
-    private fun startIMUTracking() {
-        val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        val magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
-        
-        sensorManager.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
-        sensorManager.registerListener(this, magnetometer, SensorManager.SENSOR_DELAY_NORMAL)
-    }
-    
     override fun onSensorChanged(event: SensorEvent) {
-        when (event.sensor.type) {
-            Sensor.TYPE_ACCELEROMETER -> {
-                gravity = event.values.clone()
-                detectStep(event.values)
+        try {
+            when (event.sensor.type) {
+                Sensor.TYPE_ACCELEROMETER -> {
+                    gravity = event.values.clone()
+                    detectStep(event.values)
+                }
+                Sensor.TYPE_MAGNETIC_FIELD -> {
+                    geomagnetic = event.values.clone()
+                    updateHeading()
+                }
             }
-            Sensor.TYPE_MAGNETIC_FIELD -> {
-                geomagnetic = event.values.clone()
-                updateHeading()
-            }
+        } catch (e: Exception) {
+            // Ignore sensor errors
         }
     }
     
@@ -460,9 +420,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         lastAccel = currentAccel
         currentAccel = sqrt(x * x + y * y + z * z)
         
-        val delta = currentAccel - lastAccel
-        
-        if (delta > 6.0f) {
+        if (currentAccel - lastAccel > 6.0f) {
             stepCount++
             updateIMUDisplay()
         }
@@ -476,10 +434,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             if (SensorManager.getRotationMatrix(R, I, gravity, geomagnetic)) {
                 val orientation = FloatArray(3)
                 SensorManager.getOrientation(R, orientation)
-                
                 currentHeading = Math.toDegrees(orientation[0].toDouble())
                 if (currentHeading < 0) currentHeading += 360
-                
                 updateIMUDisplay()
             }
         }
@@ -487,7 +443,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     
     private fun updateIMUDisplay() {
         runOnUiThread {
-            tvIMUStatus?.text = "IMU: Steps=$stepCount, Heading=${currentHeading.toInt()} degrees"
+            tvIMUStatus?.text = "IMU: Steps=$stepCount, Heading=${currentHeading.toInt()}"
         }
     }
     
@@ -495,6 +451,10 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     
     override fun onDestroy() {
         super.onDestroy()
-        sensorManager.unregisterListener(this)
+        try {
+            sensorManager.unregisterListener(this)
+        } catch (e: Exception) {
+            // Ignore
+        }
     }
 }
